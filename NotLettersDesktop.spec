@@ -1,12 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+
+
+project_root = Path(SPECPATH)
+icon_path = project_root / "Logo" / "logo (1).ico"
 
 a = Analysis(
-    ['main.py'],
-    pathex=[],
-    binaries=[],
-    datas=[('Logo', 'Logo')],
-    hiddenimports=[],
+    ["main.py"],
+    pathex=[str(project_root)],
+    binaries=collect_dynamic_libs("flet_desktop"),
+    datas=[("Logo", "Logo"), *collect_data_files("flet_desktop")],
+    hiddenimports=["flet_desktop"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -21,7 +28,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='NotLettersDesktop',
+    name="NotLettersDesktop",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -32,7 +39,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['C:\\Users\\Zubin\\Desktop\\парсер письм с почт\\Logo\\logo (1).ico'],
+    icon=[str(icon_path)],
 )
 coll = COLLECT(
     exe,
@@ -41,5 +48,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='NotLettersDesktop',
+    name="NotLettersDesktop",
 )

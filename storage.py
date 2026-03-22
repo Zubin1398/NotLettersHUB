@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from models import AccountConfig, AppSettings
+
+
+APP_STORAGE_DIR_NAME = "NotLettersHUB"
+
+
+def get_app_storage_dir() -> Path:
+    local_app_data = os.getenv("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / APP_STORAGE_DIR_NAME
+    return Path.home() / APP_STORAGE_DIR_NAME
 
 
 class AccountsStorage:

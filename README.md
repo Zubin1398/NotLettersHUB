@@ -1,6 +1,6 @@
 # NotLetters Desktop
 
-Desktop-приложение на Python и Flet для загрузки и просмотра писем из нескольких аккаунтов через API NotLetters.
+Desktop-приложение на Python для загрузки и просмотра писем из нескольких аккаунтов через API NotLetters.
 
 ## Возможности
 

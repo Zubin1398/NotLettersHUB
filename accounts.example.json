@@ -1,0 +1,20 @@
+{
+  "accounts": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "email": "first@example.com",
+      "password": "password123",
+      "bearer_token": "",
+      "name": "Основной аккаунт",
+      "category": "Работа"
+    },
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "email": "second@example.com",
+      "password": "password456",
+      "bearer_token": "",
+      "name": "Резервный аккаунт",
+      "category": "Личное"
+    }
+  ]
+}

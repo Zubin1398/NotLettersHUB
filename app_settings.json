@@ -1,0 +1,5 @@
+{
+  "api_key": "",
+  "bulk_refresh_batch_size": 10,
+  "bulk_refresh_pause_seconds": 2.0
+}

@@ -22,12 +22,14 @@ class AccountDialogForm:
             label="Email",
             value=account.email if account else "",
             autofocus=True,
+            border_radius=14,
         )
         self.password = ft.TextField(
             label="Пароль",
             value=account.password if account else "",
             password=True,
             can_reveal_password=True,
+            border_radius=14,
         )
         self.bearer_token = ft.TextField(
             label="Bearer token аккаунта (опционально)",
@@ -35,14 +37,17 @@ class AccountDialogForm:
             password=True,
             can_reveal_password=True,
             helper="Если поле пустое, будет использован глобальный API-ключ из настроек API.",
+            border_radius=14,
         )
         self.name = ft.TextField(
             label="Название аккаунта",
             value=account.name if account else "",
+            border_radius=14,
         )
         self.category = ft.TextField(
             label="Категория / тег (опционально)",
             value=account.category if account else "",
+            border_radius=14,
         )
 
     def build(self, title: str, on_save: ft.ControlEventHandler, on_cancel: ft.ControlEventHandler) -> ft.AlertDialog:
@@ -50,7 +55,8 @@ class AccountDialogForm:
             modal=True,
             title=ft.Text(title),
             content=ft.Container(
-                width=440,
+                width=500,
+                padding=ft.padding.only(top=4),
                 content=ft.Column(
                     controls=[
                         self.email,
@@ -68,6 +74,7 @@ class AccountDialogForm:
                 ft.FilledButton("Сохранить", on_click=on_save),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
+            content_padding=ft.padding.fromLTRB(24, 12, 24, 8),
         )
 
     def values(self) -> AccountDialogValues:
@@ -86,10 +93,12 @@ class ImportDialogForm:
             label="Общий Bearer token для импортируемых аккаунтов (опционально)",
             password=True,
             can_reveal_password=True,
+            border_radius=14,
         )
         self.name_prefix = ft.TextField(
             label="Префикс названия",
             value="Импорт",
+            border_radius=14,
         )
 
     def build(self, on_pick_file: ft.ControlEventHandler, on_cancel: ft.ControlEventHandler) -> ft.AlertDialog:
@@ -97,7 +106,8 @@ class ImportDialogForm:
             modal=True,
             title=ft.Text("Импорт аккаунтов из TXT"),
             content=ft.Container(
-                width=460,
+                width=520,
+                padding=ft.padding.only(top=4),
                 content=ft.Column(
                     controls=[
                         ft.Text(
@@ -116,6 +126,7 @@ class ImportDialogForm:
                 ft.FilledButton("Выбрать TXT", on_click=on_pick_file),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
+            content_padding=ft.padding.fromLTRB(24, 12, 24, 8),
         )
 
 
@@ -126,14 +137,17 @@ class ApiSettingsDialogForm:
             value=settings.api_key,
             password=True,
             can_reveal_password=True,
+            border_radius=14,
         )
         self.batch_size = ft.TextField(
             label="Аккаунтов в одной пачке",
             value=str(settings.bulk_refresh_batch_size),
+            border_radius=14,
         )
         self.pause_seconds = ft.TextField(
             label="Пауза между пачками (сек)",
             value=str(settings.bulk_refresh_pause_seconds),
+            border_radius=14,
         )
 
     def build(self, on_save: ft.ControlEventHandler, on_cancel: ft.ControlEventHandler) -> ft.AlertDialog:
@@ -141,7 +155,8 @@ class ApiSettingsDialogForm:
             modal=True,
             title=ft.Text("Настройки API"),
             content=ft.Container(
-                width=460,
+                width=520,
+                padding=ft.padding.only(top=4),
                 content=ft.Column(
                     controls=[
                         ft.Text(
@@ -161,4 +176,5 @@ class ApiSettingsDialogForm:
                 ft.FilledButton("Сохранить", on_click=on_save),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
+            content_padding=ft.padding.fromLTRB(24, 12, 24, 8),
         )

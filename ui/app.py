@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
+import sys
+from pathlib import Path
 
 import flet as ft
 
@@ -9,6 +12,22 @@ from api_client import ApiClientError, NotLettersClient
 from models import AccountConfig, AppSettings, Letter, LetterFilters
 from storage import AccountsStorage, AppSettingsStorage, get_app_storage_dir
 from ui.dialogs import AccountDialogForm, ApiSettingsDialogForm, ImportDialogForm
+
+
+def _resolve_runtime_asset(*relative_parts: str) -> str | None:
+    roots: list[Path] = []
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        roots.append(Path(bundle_root))
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys.executable).resolve().parent)
+    roots.append(Path(__file__).resolve().parent.parent)
+
+    for root in roots:
+        candidate = root.joinpath(*relative_parts)
+        if candidate.exists():
+            return str(candidate)
+    return None
 
 
 class MailDesktopApp:
@@ -57,8 +76,8 @@ class MailDesktopApp:
             self._set_status("Добавьте аккаунт или импортируйте список из TXT.")
 
     def _build_page(self) -> None:
-        self.page.title = "NotLetters Desktop"
-        self.page.padding = 18
+        self.page.title = "NotLettersHUB"
+        self.page.padding = 20
         self.page.spacing = 0
         self.page.theme_mode = ft.ThemeMode.DARK
         self.page.bgcolor = "#0B1220"
@@ -68,8 +87,40 @@ class MailDesktopApp:
             scaffold_bgcolor="#0B1220",
             card_bgcolor="#121A2B",
         )
+        self._configure_window()
         self.page.on_close = self._on_page_closed
         self.page.on_disconnect = self._on_page_closed
+
+    def _configure_window(self) -> None:
+        window = getattr(self.page, "window", None)
+        if window is None:
+            return
+
+        try:
+            window.min_width = 1024
+            window.min_height = 720
+            window.width = 1480
+            window.height = 920
+
+            icon_path = _resolve_runtime_asset("Logo", "logo (1).ico")
+            if icon_path:
+                window.icon = icon_path
+
+            self.page.run_task(self._center_window)
+        except (AttributeError, RuntimeError):
+            return
+
+    async def _center_window(self) -> None:
+        window = getattr(self.page, "window", None)
+        if window is None:
+            return
+
+        try:
+            result = window.center()
+            if inspect.isawaitable(result):
+                await result
+        except (AttributeError, RuntimeError):
+            return
 
     def _build_controls(self) -> None:
         self.account_favorites_switch = ft.Switch(
@@ -94,6 +145,7 @@ class MailDesktopApp:
             expand=True,
             bgcolor="#121A2B",
             border_radius=14,
+            content_padding=ft.padding.symmetric(horizontal=16, vertical=14),
             on_submit=lambda _: self.page.run_task(self.refresh_letters, True, False),
         )
         self.interval_dropdown = ft.Dropdown(
@@ -127,6 +179,7 @@ class MailDesktopApp:
         self.accounts_list = ft.ListView(expand=True, spacing=10, padding=ft.padding.only(top=8))
         self.letters_list = ft.ListView(expand=True, spacing=10, padding=ft.padding.only(top=8))
 
+        self.accounts_overview = ft.Text("Аккаунтов: 0", color=ft.Colors.WHITE70, size=12)
         self.account_summary = ft.Text("Аккаунт не выбран", size=16, weight=ft.FontWeight.W_600)
         self.letters_summary = ft.Text("Писем: 0", color=ft.Colors.WHITE70)
 
@@ -142,6 +195,7 @@ class MailDesktopApp:
             max_lines=14,
             border_radius=12,
             bgcolor="#0F1727",
+            expand=True,
         )
         self.detail_html = ft.TextField(
             value="",
@@ -151,18 +205,58 @@ class MailDesktopApp:
             max_lines=14,
             border_radius=12,
             bgcolor="#0F1727",
+            expand=True,
         )
 
         self.status_text = ft.Text("Готово к работе.", color=ft.Colors.WHITE70)
         self.api_key_status = ft.Text("", color=ft.Colors.WHITE70, size=12)
 
+        left_header = ft.Container(
+            padding=16,
+            border_radius=18,
+            bgcolor="#0D2238",
+            border=ft.border.all(1, "#1E3956"),
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Container(
+                                 width=40,
+                                 height=40,
+                                 border_radius=12,
+                                 bgcolor="#14314A",
+                                 alignment=ft.Alignment(0, 0),
+                                 content=ft.Icon(ft.Icons.MARK_EMAIL_READ_OUTLINED, color=ft.Colors.CYAN_200),
+                             ),
+                            ft.Column(
+                                controls=[
+                                    ft.Text("NotLettersHUB", size=18, weight=ft.FontWeight.BOLD),
+                                    ft.Text("Управление аккаунтами и письмами", size=12, color=ft.Colors.WHITE70),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Row(
+                        controls=[self.accounts_overview, self.api_key_status],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                ],
+                spacing=12,
+            ),
+        )
+
         left_panel = ft.Container(
-            width=395,
+            width=360,
             padding=18,
             border_radius=20,
             bgcolor="#10192B",
+            border=ft.border.all(1, "#1B2A40"),
             content=ft.Column(
                 controls=[
+                    left_header,
                     ft.Row(
                         controls=[
                             ft.Icon(ft.Icons.ACCOUNT_CIRCLE_OUTLINED, color=ft.Colors.CYAN_300),
@@ -172,42 +266,68 @@ class MailDesktopApp:
                     ),
                     ft.Row(
                         controls=[
-                            ft.FilledButton("Добавить", icon=ft.Icons.ADD, on_click=self._open_add_account_dialog),
-                            ft.OutlinedButton("Импорт TXT", icon=ft.Icons.UPLOAD_FILE, on_click=self._open_import_dialog),
+                            ft.FilledButton("Добавить", icon=ft.Icons.ADD, expand=True, on_click=self._open_add_account_dialog),
+                            ft.OutlinedButton("Импорт TXT", icon=ft.Icons.UPLOAD_FILE, expand=True, on_click=self._open_import_dialog),
                         ],
+                        spacing=10,
                     ),
                     self.refresh_all_button,
                     self.account_favorites_switch,
                     self.account_sort_dropdown,
                     ft.Row(
                         controls=[
-                            ft.OutlinedButton("Настройки API", icon=ft.Icons.KEY, on_click=self._open_api_settings_dialog),
+                            ft.OutlinedButton("Настройки API", icon=ft.Icons.KEY, expand=True, on_click=self._open_api_settings_dialog),
                         ],
                     ),
-                    self.api_key_status,
                     ft.Divider(color="#25314A"),
                     self.accounts_list,
                 ],
+                spacing=14,
                 expand=True,
             ),
         )
 
         center_panel = ft.Container(
-            expand=1,
+            expand=2,
             padding=18,
             border_radius=20,
             bgcolor="#10192B",
+            border=ft.border.all(1, "#1B2A40"),
             content=ft.Column(
                 controls=[
+                    ft.Container(
+                        padding=ft.padding.symmetric(horizontal=16, vertical=14),
+                        border_radius=18,
+                        bgcolor="#0D2238",
+                        border=ft.border.all(1, "#1E3956"),
+                        content=ft.Row(
+                            controls=[
+                                ft.Column(
+                                    controls=[
+                                        ft.Text("Лента писем", size=18, weight=ft.FontWeight.BOLD),
+                                        ft.Text(
+                                            "Поиск, обновление и быстрый просмотр по выбранному аккаунту.",
+                                            size=12,
+                                            color=ft.Colors.WHITE70,
+                                        ),
+                                    ],
+                                    spacing=2,
+                                    expand=True,
+                                ),
+                                self.loading_ring,
+                                self.refresh_button,
+                            ],
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                    ),
                     ft.Row(
                         controls=[
                             self.search_field,
                             self.interval_dropdown,
                             self.auto_refresh_switch,
-                            self.loading_ring,
-                            self.refresh_button,
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=12,
                     ),
                     ft.Row(
                         controls=[self.account_summary, ft.Container(expand=True), self.letters_summary],
@@ -216,22 +336,35 @@ class MailDesktopApp:
                     ft.Divider(color="#25314A"),
                     self.letters_list,
                 ],
+                spacing=14,
                 expand=True,
             ),
         )
 
         detail_panel = ft.Container(
-            expand=1,
+            expand=2,
             padding=18,
             border_radius=20,
             bgcolor="#10192B",
+            border=ft.border.all(1, "#1B2A40"),
             content=ft.Column(
                 controls=[
-                    self.detail_subject,
-                    self.detail_sender,
-                    ft.Row(
-                        controls=[self.detail_date, self.detail_star],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ft.Container(
+                        padding=16,
+                        border_radius=18,
+                        bgcolor="#0D2238",
+                        border=ft.border.all(1, "#1E3956"),
+                        content=ft.Column(
+                            controls=[
+                                self.detail_subject,
+                                self.detail_sender,
+                                ft.Row(
+                                    controls=[self.detail_date, self.detail_star],
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                ),
+                            ],
+                            spacing=8,
+                        ),
                     ),
                     ft.Divider(color="#25314A"),
                     ft.Text("Текстовая версия", size=15, weight=ft.FontWeight.W_600),
@@ -244,7 +377,47 @@ class MailDesktopApp:
                     ),
                     self.detail_html,
                 ],
+                spacing=12,
                 expand=True,
+            ),
+        )
+
+        top_toolbar = ft.Container(
+            margin=ft.margin.only(bottom=16),
+            padding=ft.padding.symmetric(horizontal=18, vertical=14),
+            border_radius=18,
+            bgcolor="#10192B",
+            border=ft.border.all(1, "#1B2A40"),
+            content=ft.Row(
+                controls=[
+                    ft.Column(
+                        controls=[
+                            ft.Text("NotLettersHUB", size=22, weight=ft.FontWeight.BOLD),
+                            ft.Text(
+                                "Desktop-клиент для просмотра писем через API NotLetters",
+                                color=ft.Colors.WHITE70,
+                                size=12,
+                            ),
+                        ],
+                        spacing=2,
+                        expand=True,
+                    ),
+                    ft.Container(
+                        padding=ft.padding.symmetric(horizontal=14, vertical=10),
+                        border_radius=14,
+                        bgcolor="#0D2238",
+                        border=ft.border.all(1, "#1E3956"),
+                        content=ft.Row(
+                            controls=[
+                                ft.Icon(ft.Icons.DESKTOP_WINDOWS_OUTLINED, size=18, color=ft.Colors.CYAN_200),
+                                ft.Text("Desktop UI", size=12, color=ft.Colors.WHITE70),
+                            ],
+                            spacing=8,
+                            tight=True,
+                        ),
+                    ),
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
         )
 
@@ -253,10 +426,13 @@ class MailDesktopApp:
             padding=ft.padding.symmetric(horizontal=14, vertical=12),
             border_radius=16,
             bgcolor="#10192B",
+            border=ft.border.all(1, "#1B2A40"),
             content=ft.Row(
                 controls=[
                     ft.Icon(ft.Icons.INFO_OUTLINE, size=18, color=ft.Colors.CYAN_300),
                     self.status_text,
+                    ft.Container(expand=True),
+                    ft.Text("NotLettersHUB", size=12, color=ft.Colors.WHITE54),
                 ]
             ),
         )
@@ -264,6 +440,7 @@ class MailDesktopApp:
         self.layout = ft.Column(
             expand=True,
             controls=[
+                top_toolbar,
                 ft.Row(
                     expand=True,
                     spacing=16,
@@ -278,7 +455,8 @@ class MailDesktopApp:
             self._build_account_card(index + 1, account)
             for index, account in enumerate(self._get_filtered_accounts())
         ]
-        self._safe_update(self.accounts_list)
+        self.accounts_overview.value = f"Аккаунтов: {len(self.accounts)}"
+        self._safe_update(self.accounts_list, self.accounts_overview)
 
     def _build_account_card(self, index: int, account: AccountConfig) -> ft.Control:
         is_selected = account.id == self.selected_account_id
@@ -336,6 +514,7 @@ class MailDesktopApp:
         return ft.Container(
             border_radius=16,
             bgcolor="#193150" if is_selected else "#121A2B",
+            border=ft.border.all(1, "#2A527A" if is_selected else "#1C2940"),
             padding=14,
             ink=True,
             on_click=lambda _, account_id=account.id: self.select_account(account_id),
@@ -364,6 +543,7 @@ class MailDesktopApp:
         return ft.Container(
             border_radius=16,
             bgcolor="#193150" if is_selected else "#121A2B",
+            border=ft.border.all(1, "#2A527A" if is_selected else "#1C2940"),
             padding=14,
             ink=True,
             on_click=lambda _, letter_id=letter.id: self.select_letter(letter_id),

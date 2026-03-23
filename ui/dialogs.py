@@ -74,7 +74,7 @@ class AccountDialogForm:
                 ft.FilledButton("Сохранить", on_click=on_save),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
-            content_padding=ft.padding.fromLTRB(24, 12, 24, 8),
+            content_padding=ft.padding.only(left=24, top=12, right=24, bottom=8),
         )
 
     def values(self) -> AccountDialogValues:
@@ -126,7 +126,7 @@ class ImportDialogForm:
                 ft.FilledButton("Выбрать TXT", on_click=on_pick_file),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
-            content_padding=ft.padding.fromLTRB(24, 12, 24, 8),
+            content_padding=ft.padding.only(left=24, top=12, right=24, bottom=8),
         )
 
 
@@ -176,5 +176,5 @@ class ApiSettingsDialogForm:
                 ft.FilledButton("Сохранить", on_click=on_save),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
-            content_padding=ft.padding.fromLTRB(24, 12, 24, 8),
+            content_padding=ft.padding.only(left=24, top=12, right=24, bottom=8),
         )

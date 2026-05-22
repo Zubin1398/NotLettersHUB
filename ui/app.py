@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import re
 import sys
+import tkinter as tk
+from tkinter import filedialog
 from pathlib import Path
 
 import flet as ft
@@ -30,6 +33,11 @@ def _resolve_runtime_asset(*relative_parts: str) -> str | None:
     return None
 
 
+def _border(width: int | float, color: str) -> ft.Border:
+    side = ft.BorderSide(width, color)
+    return ft.Border(side, side, side, side)
+
+
 class MailDesktopApp:
     def __init__(self, page: ft.Page) -> None:
         self.page = page
@@ -46,13 +54,14 @@ class MailDesktopApp:
         self.current_letters: list[Letter] = []
         self.selected_account_id: str | None = None
         self.selected_letter_id: str | None = None
-        self.auto_refresh_seconds = 45
-        self.auto_refresh_enabled = True
         self.bulk_refresh_batch_size = 10
         self.bulk_refresh_pause_seconds = 2.0
-        self.active_requests = 0
         self.request_counter = 0
+        self.is_bulk_refreshing = False
         self.is_closing = False
+        self.accounts_panel_visible = True
+        self.detail_panel_visible = True
+        self.account_tools_visible = False
 
         self._build_page()
         self._build_controls()
@@ -63,11 +72,11 @@ class MailDesktopApp:
         self.bulk_refresh_batch_size = self.settings.bulk_refresh_batch_size
         self.bulk_refresh_pause_seconds = self.settings.bulk_refresh_pause_seconds
         self.page.add(self.layout)
+        self._set_loading(False)
         self._update_api_key_status()
         self._render_accounts()
         self._render_letters()
         self._show_empty_letter()
-        self.page.run_task(self._auto_refresh_loop)
 
         if self.accounts:
             filtered_accounts = self._get_filtered_accounts()
@@ -97,10 +106,10 @@ class MailDesktopApp:
             return
 
         try:
-            window.min_width = 1024
-            window.min_height = 720
-            window.width = 1480
-            window.height = 920
+            window.min_width = 900
+            window.min_height = 620
+            window.width = 1250
+            window.height = 800
 
             icon_path = _resolve_runtime_asset("Logo", "logo (1).ico")
             if icon_path:
@@ -145,24 +154,28 @@ class MailDesktopApp:
             expand=True,
             bgcolor="#121A2B",
             border_radius=14,
-            content_padding=ft.padding.symmetric(horizontal=16, vertical=14),
+            content_padding=ft.Padding(16, 14, 16, 14),
             on_submit=lambda _: self.page.run_task(self.refresh_letters, True, False),
         )
-        self.interval_dropdown = ft.Dropdown(
-            width=150,
-            label="Автообновление",
-            value="45",
-            options=[
-                ft.dropdown.Option("30", "30 сек"),
-                ft.dropdown.Option("45", "45 сек"),
-                ft.dropdown.Option("60", "60 сек"),
-            ],
-            on_select=self._on_interval_changed,
+        self.toggle_account_tools_button = ft.TextButton(
+            "Фильтры",
+            icon=ft.Icons.TUNE,
+            on_click=self._toggle_account_tools,
         )
-        self.auto_refresh_switch = ft.Switch(
-            label="Автообновлять все",
-            value=True,
-            on_change=self._on_auto_refresh_toggled,
+        self.toggle_accounts_left_button = ft.IconButton(
+            icon=ft.Icons.CHEVRON_LEFT,
+            tooltip="Скрыть список аккаунтов",
+            on_click=self._toggle_accounts_panel,
+        )
+        self.toggle_accounts_toolbar_button = ft.IconButton(
+            icon=ft.Icons.VIEW_SIDEBAR_OUTLINED,
+            tooltip="Скрыть список аккаунтов",
+            on_click=self._toggle_accounts_panel,
+        )
+        self.toggle_detail_toolbar_button = ft.IconButton(
+            icon=ft.Icons.CHEVRON_RIGHT,
+            tooltip="Скрыть просмотр письма",
+            on_click=self._toggle_detail_panel,
         )
         self.loading_ring = ft.ProgressRing(width=18, height=18, visible=False)
         self.refresh_button = ft.FilledButton(
@@ -173,17 +186,50 @@ class MailDesktopApp:
         self.refresh_all_button = ft.OutlinedButton(
             "Обновить всё",
             icon=ft.Icons.SYNC,
+            height=38,
             on_click=lambda _: self.page.run_task(self.refresh_all_accounts, True, True),
         )
-
-        self.accounts_list = ft.ListView(expand=True, spacing=10, padding=ft.padding.only(top=8))
-        self.letters_list = ft.ListView(expand=True, spacing=10, padding=ft.padding.only(top=8))
+        self.top_api_settings_button = ft.OutlinedButton(
+            "Настройки API",
+            icon=ft.Icons.KEY,
+            height=38,
+            on_click=self._open_api_settings_dialog,
+        )
+        self.accounts_list = ft.ListView(expand=True, spacing=10, padding=ft.Padding(0, 8, 0, 0))
+        self.letters_list = ft.ListView(expand=True, spacing=10, padding=ft.Padding(0, 8, 0, 0))
 
         self.accounts_overview = ft.Text("Аккаунтов: 0", color=ft.Colors.WHITE70, size=12)
-        self.account_summary = ft.Text("Аккаунт не выбран", size=16, weight=ft.FontWeight.W_600)
+        self.account_summary = ft.Text("Аккаунт не выбран", size=15, weight=ft.FontWeight.W_600)
+        self.account_summary.max_lines = 2
+        self.account_summary_action = ft.Container(
+            content=self.account_summary,
+            ink=True,
+            border_radius=8,
+            padding=ft.Padding(8, 4, 8, 4),
+            tooltip="Нажмите, чтобы скопировать email выбранного аккаунта",
+            on_click=lambda _: self.page.run_task(self._copy_selected_account_email),
+        )
         self.letters_summary = ft.Text("Писем: 0", color=ft.Colors.WHITE70)
+        self.account_tools_panel = ft.Container(
+            visible=False,
+            content=ft.Column(
+                controls=[
+                    self.account_favorites_switch,
+                    self.account_sort_dropdown,
+                ],
+                spacing=8,
+                tight=True,
+            ),
+        )
 
-        self.detail_subject = ft.Text("Выберите письмо", size=20, weight=ft.FontWeight.BOLD)
+        self.detail_subject = ft.Text(
+            "Выберите письмо",
+            size=17,
+            weight=ft.FontWeight.BOLD,
+            max_lines=3,
+            overflow=ft.TextOverflow.ELLIPSIS,
+            selectable=True,
+        )
         self.detail_sender = ft.Text("", selectable=True, color=ft.Colors.WHITE70)
         self.detail_date = ft.Text("", color=ft.Colors.WHITE70)
         self.detail_star = ft.Text("", color=ft.Colors.AMBER_300)
@@ -191,19 +237,9 @@ class MailDesktopApp:
             value="",
             read_only=True,
             multiline=True,
-            min_lines=10,
-            max_lines=14,
-            border_radius=12,
-            bgcolor="#0F1727",
-            expand=True,
-        )
-        self.detail_html = ft.TextField(
-            value="",
-            read_only=True,
-            multiline=True,
-            min_lines=10,
-            max_lines=14,
-            border_radius=12,
+            min_lines=18,
+            max_lines=28,
+            border_radius=8,
             bgcolor="#0F1727",
             expand=True,
         )
@@ -211,111 +247,74 @@ class MailDesktopApp:
         self.status_text = ft.Text("Готово к работе.", color=ft.Colors.WHITE70)
         self.api_key_status = ft.Text("", color=ft.Colors.WHITE70, size=12)
 
-        left_header = ft.Container(
-            padding=16,
-            border_radius=18,
+        account_counter = ft.Container(
+            padding=ft.Padding(10, 8, 10, 8),
+            border_radius=8,
             bgcolor="#0D2238",
-            border=ft.border.all(1, "#1E3956"),
-            content=ft.Column(
+            border=_border(1, "#1E3956"),
+            content=ft.Row(
                 controls=[
-                    ft.Row(
-                        controls=[
-                            ft.Container(
-                                 width=40,
-                                 height=40,
-                                 border_radius=12,
-                                 bgcolor="#14314A",
-                                 alignment=ft.Alignment(0, 0),
-                                 content=ft.Icon(ft.Icons.MARK_EMAIL_READ_OUTLINED, color=ft.Colors.CYAN_200),
-                             ),
-                            ft.Column(
-                                controls=[
-                                    ft.Text("NotLettersHUB", size=18, weight=ft.FontWeight.BOLD),
-                                    ft.Text("Управление аккаунтами и письмами", size=12, color=ft.Colors.WHITE70),
-                                ],
-                                spacing=2,
-                                expand=True,
-                            ),
-                        ],
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    ft.Row(
-                        controls=[self.accounts_overview, self.api_key_status],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
+                    ft.Icon(ft.Icons.ACCOUNT_CIRCLE_OUTLINED, size=16, color=ft.Colors.CYAN_200),
+                    self.accounts_overview,
                 ],
-                spacing=12,
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
         )
 
         left_panel = ft.Container(
-            width=360,
-            padding=18,
-            border_radius=20,
+            width=280,
+            padding=10,
+            border_radius=10,
             bgcolor="#10192B",
-            border=ft.border.all(1, "#1B2A40"),
+            border=_border(1, "#1B2A40"),
             content=ft.Column(
                 controls=[
-                    left_header,
                     ft.Row(
                         controls=[
-                            ft.Icon(ft.Icons.ACCOUNT_CIRCLE_OUTLINED, color=ft.Colors.CYAN_300),
-                            ft.Text("Почтовые аккаунты", size=18, weight=ft.FontWeight.BOLD),
+                            ft.Text("Аккаунты", size=16, weight=ft.FontWeight.BOLD),
+                            ft.Container(expand=True),
+                            self.toggle_accounts_left_button,
                         ],
                         alignment=ft.MainAxisAlignment.START,
                     ),
                     ft.Row(
                         controls=[
-                            ft.FilledButton("Добавить", icon=ft.Icons.ADD, expand=True, on_click=self._open_add_account_dialog),
-                            ft.OutlinedButton("Импорт TXT", icon=ft.Icons.UPLOAD_FILE, expand=True, on_click=self._open_import_dialog),
+                            ft.FilledButton("Новый", icon=ft.Icons.ADD, expand=True, on_click=self._open_add_account_dialog),
+                            ft.OutlinedButton("TXT", icon=ft.Icons.UPLOAD_FILE, expand=True, on_click=self._open_import_dialog),
                         ],
-                        spacing=10,
+                        spacing=8,
                     ),
-                    self.refresh_all_button,
-                    self.account_favorites_switch,
-                    self.account_sort_dropdown,
-                    ft.Row(
-                        controls=[
-                            ft.OutlinedButton("Настройки API", icon=ft.Icons.KEY, expand=True, on_click=self._open_api_settings_dialog),
-                        ],
-                    ),
+                    self.toggle_account_tools_button,
+                    self.account_tools_panel,
                     ft.Divider(color="#25314A"),
                     self.accounts_list,
                 ],
-                spacing=14,
+                spacing=8,
                 expand=True,
             ),
         )
 
         center_panel = ft.Container(
             expand=2,
-            padding=18,
-            border_radius=20,
+            padding=12,
+            border_radius=10,
             bgcolor="#10192B",
-            border=ft.border.all(1, "#1B2A40"),
+            border=_border(1, "#1B2A40"),
             content=ft.Column(
                 controls=[
                     ft.Container(
-                        padding=ft.padding.symmetric(horizontal=16, vertical=14),
-                        border_radius=18,
+                        padding=ft.Padding(12, 10, 12, 10),
+                        border_radius=8,
                         bgcolor="#0D2238",
-                        border=ft.border.all(1, "#1E3956"),
+                        border=_border(1, "#1E3956"),
                         content=ft.Row(
                             controls=[
-                                ft.Column(
-                                    controls=[
-                                        ft.Text("Лента писем", size=18, weight=ft.FontWeight.BOLD),
-                                        ft.Text(
-                                            "Поиск, обновление и быстрый просмотр по выбранному аккаунту.",
-                                            size=12,
-                                            color=ft.Colors.WHITE70,
-                                        ),
-                                    ],
-                                    spacing=2,
-                                    expand=True,
-                                ),
+                                self.toggle_accounts_toolbar_button,
+                                ft.Text("Письма", size=16, weight=ft.FontWeight.BOLD, expand=True),
                                 self.loading_ring,
                                 self.refresh_button,
+                                self.toggle_detail_toolbar_button,
                             ],
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
@@ -323,110 +322,84 @@ class MailDesktopApp:
                     ft.Row(
                         controls=[
                             self.search_field,
-                            self.interval_dropdown,
-                            self.auto_refresh_switch,
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=12,
                     ),
                     ft.Row(
-                        controls=[self.account_summary, ft.Container(expand=True), self.letters_summary],
+                        controls=[self.account_summary_action, ft.Container(expand=True), self.letters_summary],
                         alignment=ft.MainAxisAlignment.START,
                     ),
                     ft.Divider(color="#25314A"),
                     self.letters_list,
                 ],
-                spacing=14,
+                spacing=10,
                 expand=True,
             ),
         )
 
         detail_panel = ft.Container(
             expand=2,
-            padding=18,
-            border_radius=20,
+            padding=12,
+            border_radius=10,
             bgcolor="#10192B",
-            border=ft.border.all(1, "#1B2A40"),
+            border=_border(1, "#1B2A40"),
             content=ft.Column(
                 controls=[
                     ft.Container(
-                        padding=16,
-                        border_radius=18,
+                        padding=ft.Padding(12, 8, 12, 10),
+                        border_radius=8,
                         bgcolor="#0D2238",
-                        border=ft.border.all(1, "#1E3956"),
+                        border=_border(1, "#1E3956"),
                         content=ft.Column(
                             controls=[
-                                self.detail_subject,
+                                ft.Container(
+                                    content=self.detail_subject,
+                                    width=float("inf"),
+                                ),
                                 self.detail_sender,
                                 ft.Row(
                                     controls=[self.detail_date, self.detail_star],
                                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                 ),
                             ],
-                            spacing=8,
+                            spacing=5,
+                            tight=True,
                         ),
                     ),
                     ft.Divider(color="#25314A"),
-                    ft.Text("Текстовая версия", size=15, weight=ft.FontWeight.W_600),
+                    ft.Text("Текст письма", size=15, weight=ft.FontWeight.W_600),
                     self.detail_text,
-                    ft.Divider(color="#25314A"),
-                    ft.Text("HTML-версия", size=15, weight=ft.FontWeight.W_600),
-                    ft.Text(
-                        "Если HTML сложно отрисовать в Flet, ниже показывается исходный код письма.",
-                        color=ft.Colors.WHITE70,
-                    ),
-                    self.detail_html,
                 ],
-                spacing=12,
+                spacing=10,
                 expand=True,
             ),
         )
 
         top_toolbar = ft.Container(
-            margin=ft.margin.only(bottom=16),
-            padding=ft.padding.symmetric(horizontal=18, vertical=14),
-            border_radius=18,
+            margin=ft.Margin(0, 0, 0, 10),
+            padding=ft.Padding(12, 10, 12, 10),
+            border_radius=10,
             bgcolor="#10192B",
-            border=ft.border.all(1, "#1B2A40"),
+            border=_border(1, "#1B2A40"),
             content=ft.Row(
                 controls=[
-                    ft.Column(
-                        controls=[
-                            ft.Text("NotLettersHUB", size=22, weight=ft.FontWeight.BOLD),
-                            ft.Text(
-                                "Desktop-клиент для просмотра писем через API NotLetters",
-                                color=ft.Colors.WHITE70,
-                                size=12,
-                            ),
-                        ],
-                        spacing=2,
-                        expand=True,
-                    ),
-                    ft.Container(
-                        padding=ft.padding.symmetric(horizontal=14, vertical=10),
-                        border_radius=14,
-                        bgcolor="#0D2238",
-                        border=ft.border.all(1, "#1E3956"),
-                        content=ft.Row(
-                            controls=[
-                                ft.Icon(ft.Icons.DESKTOP_WINDOWS_OUTLINED, size=18, color=ft.Colors.CYAN_200),
-                                ft.Text("Desktop UI", size=12, color=ft.Colors.WHITE70),
-                            ],
-                            spacing=8,
-                            tight=True,
-                        ),
-                    ),
+                    self.top_api_settings_button,
+                    self.refresh_all_button,
+                    ft.Container(expand=True),
+                    account_counter,
                 ],
+                spacing=10,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
         )
 
         status_bar = ft.Container(
-            margin=ft.margin.only(top=16),
-            padding=ft.padding.symmetric(horizontal=14, vertical=12),
+            margin=ft.Margin(0, 16, 0, 0),
+            padding=ft.Padding(14, 12, 14, 12),
             border_radius=16,
             bgcolor="#10192B",
-            border=ft.border.all(1, "#1B2A40"),
+            border=_border(1, "#1B2A40"),
             content=ft.Row(
                 controls=[
                     ft.Icon(ft.Icons.INFO_OUTLINE, size=18, color=ft.Colors.CYAN_300),
@@ -437,15 +410,19 @@ class MailDesktopApp:
             ),
         )
 
+        self.left_panel = left_panel
+        self.detail_panel = detail_panel
+        self.content_row = ft.Row(
+            expand=True,
+            spacing=10,
+            controls=[self.left_panel, center_panel, self.detail_panel],
+        )
+
         self.layout = ft.Column(
             expand=True,
             controls=[
                 top_toolbar,
-                ft.Row(
-                    expand=True,
-                    spacing=16,
-                    controls=[left_panel, center_panel, detail_panel],
-                ),
+                self.content_row,
                 status_bar,
             ],
         )
@@ -462,23 +439,25 @@ class MailDesktopApp:
         is_selected = account.id == self.selected_account_id
         latest_date = self.account_latest_dates.get(account.id, 0)
         has_unread = self.account_has_unread.get(account.id, False)
-        subtitle = account.email
+        latest_text = ""
         if latest_date > 0:
-            subtitle = f"{subtitle} | последнее письмо: {self._format_timestamp(latest_date)}"
+            latest_text = f"Последнее: {self._format_timestamp(latest_date)}"
 
         header_controls: list[ft.Control] = [
-            ft.Text(f"{index}.", width=28, color=ft.Colors.WHITE60),
+            ft.Text(f"{index}.", width=24, color=ft.Colors.WHITE60, size=12),
             ft.Text(
                 account.display_name,
                 weight=ft.FontWeight.W_600,
                 color=ft.Colors.GREEN_300 if has_unread else ft.Colors.WHITE,
                 expand=True,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
             ),
         ]
         if account.category:
             header_controls.append(
                 ft.Container(
-                    padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                    padding=ft.Padding(8, 4, 8, 4),
                     border_radius=12,
                     bgcolor="#17314E",
                     content=ft.Text(account.category, size=11, color=ft.Colors.CYAN_100),
@@ -497,6 +476,11 @@ class MailDesktopApp:
                     icon=ft.Icons.MORE_VERT,
                     items=[
                         ft.PopupMenuItem(
+                            content="Копировать email",
+                            icon=ft.Icons.CONTENT_COPY,
+                            on_click=lambda _, email=account.email: self.page.run_task(self._copy_email, email),
+                        ),
+                        ft.PopupMenuItem(
                             content="Редактировать",
                             icon=ft.Icons.EDIT,
                             on_click=lambda _, account_id=account.id: self._open_edit_account_by_id(account_id),
@@ -512,23 +496,26 @@ class MailDesktopApp:
         )
 
         return ft.Container(
-            border_radius=16,
+            border_radius=8,
             bgcolor="#193150" if is_selected else "#121A2B",
-            border=ft.border.all(1, "#2A527A" if is_selected else "#1C2940"),
-            padding=14,
+            border=_border(1, "#2A527A" if is_selected else "#1C2940"),
+            padding=10,
             ink=True,
             on_click=lambda _, account_id=account.id: self.select_account(account_id),
             content=ft.Column(
                 controls=[
                     ft.Row(controls=header_controls, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    ft.Text(subtitle, color=ft.Colors.WHITE70, size=12),
-                    ft.Text(
-                        "Есть новые письма" if has_unread else "Новых писем нет",
-                        color=ft.Colors.GREEN_300 if has_unread else ft.Colors.WHITE54,
-                        size=12,
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.ALTERNATE_EMAIL, size=13, color=ft.Colors.WHITE54),
+                            ft.Text(account.email, color=ft.Colors.WHITE70, size=12, expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                        ],
+                        spacing=4,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
+                    ft.Text(latest_text or ("Есть новые письма" if has_unread else "Новых писем нет"), color=ft.Colors.GREEN_300 if has_unread else ft.Colors.WHITE54, size=11),
                 ],
-                spacing=6,
+                spacing=4,
             ),
         )
 
@@ -543,7 +530,7 @@ class MailDesktopApp:
         return ft.Container(
             border_radius=16,
             bgcolor="#193150" if is_selected else "#121A2B",
-            border=ft.border.all(1, "#2A527A" if is_selected else "#1C2940"),
+            border=_border(1, "#2A527A" if is_selected else "#1C2940"),
             padding=14,
             ink=True,
             on_click=lambda _, letter_id=letter.id: self.select_letter(letter_id),
@@ -568,6 +555,7 @@ class MailDesktopApp:
         )
 
     def select_account(self, account_id: str) -> None:
+        self._set_loading(False)
         self.selected_account_id = account_id
         self.selected_letter_id = None
         self.account_has_unread[account_id] = False
@@ -580,7 +568,7 @@ class MailDesktopApp:
             self._show_empty_letter()
             return
 
-        self.account_summary.value = account.display_name
+        self.account_summary.value = f"{account.display_name} · {account.email}"
         self._safe_update(self.account_summary)
         self._render_accounts()
 
@@ -595,7 +583,7 @@ class MailDesktopApp:
             self._render_letters()
             self._show_empty_letter("Загружаем письма выбранного аккаунта...")
 
-        self.page.run_task(self.refresh_letters, False, True)
+        self.page.run_task(self.refresh_letters, False, False)
 
     def select_letter(self, letter_id: str, mark_read: bool = True) -> None:
         selected_letter = next((item for item in self.current_letters if item.id == letter_id), None)
@@ -604,6 +592,8 @@ class MailDesktopApp:
             return
 
         self.selected_letter_id = letter_id
+        if not self.detail_panel_visible:
+            self._toggle_detail_panel()
         if self.selected_account_id and mark_read:
             self.account_has_unread[self.selected_account_id] = False
         account = self._get_selected_account()
@@ -619,7 +609,6 @@ class MailDesktopApp:
         self.detail_date.value = f"Дата: {selected_letter.formatted_date}"
         self.detail_star.value = " | ".join(badges)
         self.detail_text.value = selected_letter.body.text or "Текстовая версия письма отсутствует."
-        self.detail_html.value = selected_letter.body.html or "HTML-версия письма отсутствует."
 
         self._safe_update(
             self.detail_subject,
@@ -627,7 +616,6 @@ class MailDesktopApp:
             self.detail_date,
             self.detail_star,
             self.detail_text,
-            self.detail_html,
         )
         self._render_accounts()
         self._render_letters()
@@ -644,15 +632,27 @@ class MailDesktopApp:
         request_id = self.request_counter
         previous_letters = self.letters_cache.get(account.id, [])
         previous_ids = {letter.id for letter in previous_letters}
+        show_loading = user_initiated
 
-        self.active_requests += 1
-        self._set_loading(True)
+        if show_loading:
+            self._set_loading(True)
         self._set_status(f"Загружаем письма для {account.display_name}...")
 
         try:
-            letters = await asyncio.to_thread(self.api_client.fetch_letters, account, filters, self.settings.api_key)
+            letters = await asyncio.wait_for(
+                asyncio.to_thread(self.api_client.fetch_letters, account, filters, self.settings.api_key),
+                timeout=self.api_client.timeout + 5,
+            )
         except asyncio.CancelledError:
             return
+        except asyncio.TimeoutError:
+            message = "Загрузка писем заняла слишком много времени. Попробуйте обновить аккаунт вручную позже."
+            self.current_letters = []
+            self._render_letters()
+            self._show_empty_letter("Не удалось получить письма.")
+            self._set_status(message)
+            if show_notifications:
+                self._notify(message, error=True)
         except ApiClientError as exc:
             self.current_letters = []
             self._render_letters()
@@ -682,6 +682,8 @@ class MailDesktopApp:
             self.current_letters = letters
             self._render_accounts()
             self._render_letters()
+            if show_loading and not self.is_bulk_refreshing and not self.is_closing:
+                self._set_loading(False)
 
             if letters:
                 keep_letter_id = self.selected_letter_id if any(letter.id == self.selected_letter_id for letter in letters) else letters[0].id
@@ -696,8 +698,7 @@ class MailDesktopApp:
                 if show_notifications:
                     self._notify("Писем по заданным фильтрам не найдено.")
         finally:
-            self.active_requests = max(0, self.active_requests - 1)
-            if self.active_requests == 0 and not self.is_closing:
+            if show_loading and not self.is_bulk_refreshing and not self.is_closing:
                 self._set_loading(False)
 
     async def refresh_all_accounts(self, user_initiated: bool = False, show_notifications: bool = True) -> None:
@@ -706,7 +707,12 @@ class MailDesktopApp:
                 self._notify("Список аккаунтов пуст.", error=True)
             return
 
-        self.active_requests += 1
+        if self.is_bulk_refreshing:
+            if show_notifications:
+                self._notify("Обновление всех аккаунтов уже выполняется.")
+            return
+
+        self.is_bulk_refreshing = True
         self._set_loading(True)
         self._set_status("Обновляем все аккаунты...")
 
@@ -789,21 +795,9 @@ class MailDesktopApp:
                 if show_notifications:
                     self._notify("Все аккаунты успешно обновлены.")
         finally:
-            self.active_requests = max(0, self.active_requests - 1)
-            if self.active_requests == 0 and not self.is_closing:
+            self.is_bulk_refreshing = False
+            if not self.is_closing:
                 self._set_loading(False)
-
-    async def _auto_refresh_loop(self) -> None:
-        # Фоновая задача не блокирует интерфейс и безопасно завершается при закрытии окна.
-        try:
-            while not self.is_closing:
-                await asyncio.sleep(self.auto_refresh_seconds)
-                if self.is_closing:
-                    break
-                if self.auto_refresh_enabled and self.active_requests == 0:
-                    await self.refresh_all_accounts(False, False)
-        except asyncio.CancelledError:
-            return
 
     def _open_add_account_dialog(self, _: ft.ControlEvent) -> None:
         form = AccountDialogForm()
@@ -874,7 +868,7 @@ class MailDesktopApp:
             self._close_dialog()
             self._render_accounts()
             if self.selected_account_id == account.id:
-                self.account_summary.value = account.display_name
+                self.account_summary.value = f"{account.display_name} · {account.email}"
                 self._safe_update(self.account_summary)
             self._notify("Аккаунт обновлён.")
 
@@ -945,21 +939,11 @@ class MailDesktopApp:
 
     async def _pick_import_file(self, form: ImportDialogForm) -> None:
         self._close_dialog()
-        files = await ft.FilePicker().pick_files(
-            allow_multiple=False,
-            file_type=ft.FilePickerFileType.CUSTOM,
-            allowed_extensions=["txt"],
-            dialog_title="Выберите TXT-файл со списком аккаунтов",
-        )
-        if not files:
+        selected_path = await asyncio.to_thread(self._open_txt_file_dialog)
+        if not selected_path:
             return
 
-        picked_file = files[0]
-        if not picked_file.path:
-            self._notify("Не удалось получить путь к выбранному TXT-файлу.", error=True)
-            return
-
-        file_path = Path(picked_file.path)
+        file_path = Path(selected_path)
         try:
             imported_accounts = self.storage.parse_txt_accounts(
                 file_path=file_path,
@@ -988,19 +972,64 @@ class MailDesktopApp:
 
         self._notify(f"Импорт завершён. Добавлено: {added}, обновлено: {updated}.{suffix}")
 
-    def _on_interval_changed(self, _: ft.ControlEvent) -> None:
+    @staticmethod
+    def _open_txt_file_dialog() -> str:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
         try:
-            self.auto_refresh_seconds = int(self.interval_dropdown.value or "45")
-        except ValueError:
-            self.auto_refresh_seconds = 45
-            self.interval_dropdown.value = "45"
-            self._safe_update(self.interval_dropdown)
-        self._set_status(f"Интервал автообновления: {self.auto_refresh_seconds} сек.")
+            return filedialog.askopenfilename(
+                title="Выберите TXT-файл со списком аккаунтов",
+                filetypes=(("TXT файлы", "*.txt"), ("Все файлы", "*.*")),
+            )
+        finally:
+            root.destroy()
 
-    def _on_auto_refresh_toggled(self, _: ft.ControlEvent) -> None:
-        self.auto_refresh_enabled = bool(self.auto_refresh_switch.value)
-        state = "включено" if self.auto_refresh_enabled else "выключено"
-        self._set_status(f"Массовое автообновление {state}.")
+    def _toggle_account_tools(self, _: ft.ControlEvent | None = None) -> None:
+        self.account_tools_visible = not self.account_tools_visible
+        self.account_tools_panel.visible = self.account_tools_visible
+        self.toggle_account_tools_button.icon = ft.Icons.EXPAND_LESS if self.account_tools_visible else ft.Icons.TUNE
+        self.toggle_account_tools_button.text = "Скрыть фильтры" if self.account_tools_visible else "Фильтры"
+        self._safe_update()
+
+    def _toggle_accounts_panel(self, _: ft.ControlEvent | None = None) -> None:
+        self.accounts_panel_visible = not self.accounts_panel_visible
+        self.left_panel.visible = self.accounts_panel_visible
+        icon = ft.Icons.CHEVRON_LEFT if self.accounts_panel_visible else ft.Icons.VIEW_SIDEBAR_OUTLINED
+        tooltip = "Скрыть список аккаунтов" if self.accounts_panel_visible else "Показать список аккаунтов"
+        for button in (self.toggle_accounts_left_button, self.toggle_accounts_toolbar_button):
+            button.icon = icon
+            button.tooltip = tooltip
+        self._safe_update(self.left_panel, self.toggle_accounts_left_button, self.toggle_accounts_toolbar_button)
+
+    def _toggle_detail_panel(self, _: ft.ControlEvent | None = None) -> None:
+        self.detail_panel_visible = not self.detail_panel_visible
+        self.detail_panel.visible = self.detail_panel_visible
+        icon = ft.Icons.CHEVRON_RIGHT if self.detail_panel_visible else ft.Icons.VIEW_SIDEBAR_OUTLINED
+        tooltip = "Скрыть просмотр письма" if self.detail_panel_visible else "Показать просмотр письма"
+        self.toggle_detail_toolbar_button.icon = icon
+        self.toggle_detail_toolbar_button.tooltip = tooltip
+        self._safe_update(self.detail_panel, self.toggle_detail_toolbar_button)
+
+    async def _copy_selected_account_email(self) -> None:
+        account = self._get_selected_account()
+        if account is None:
+            self._notify("Сначала выберите аккаунт.", error=True)
+            return
+        await self._copy_email(account.email)
+
+    async def _copy_email(self, email: str) -> None:
+        if not email:
+            self._notify("Email не найден.", error=True)
+            return
+        try:
+            result = self.page.clipboard.set(email)
+            if inspect.isawaitable(result):
+                await result
+        except RuntimeError:
+            self._notify("Не удалось скопировать email.", error=True)
+            return
+        self._notify(f"Email скопирован: {email}")
 
     def _validate_account_values(self, email: str, password: str, token: str) -> str | None:
         if not email:
@@ -1043,23 +1072,23 @@ class MailDesktopApp:
         self.detail_date.value = ""
         self.detail_star.value = ""
         self.detail_text.value = ""
-        self.detail_html.value = ""
         self._safe_update(
             self.detail_subject,
             self.detail_sender,
             self.detail_date,
             self.detail_star,
             self.detail_text,
-            self.detail_html,
         )
 
     def _set_loading(self, state: bool) -> None:
         self.loading_ring.visible = state
         self.refresh_button.disabled = state
-        self._safe_update(self.loading_ring, self.refresh_button)
+        self.refresh_all_button.disabled = state
+        self._safe_update()
 
     def _set_status(self, text: str) -> None:
         self.status_text.value = text
+        self.status_text.color = ft.Colors.WHITE70
         self._safe_update(self.status_text)
 
     async def _fetch_account_for_bulk_refresh(self, account: AccountConfig) -> tuple[list[Letter], set[str]]:
@@ -1145,21 +1174,21 @@ class MailDesktopApp:
         return ft.Colors.AMBER_300
 
     def _notify(self, message: str, error: bool = False) -> None:
-        self._show_dialog(
-            ft.SnackBar(
-                content=ft.Text(message),
-                bgcolor=ft.Colors.RED_400 if error else ft.Colors.GREEN_400,
-                behavior=ft.SnackBarBehavior.FLOATING,
-            )
-        )
+        self.status_text.value = message
+        self.status_text.color = ft.Colors.RED_300 if error else ft.Colors.GREEN_300
+        self._safe_update(self.status_text)
 
     def _show_dialog(self, dialog: ft.Control) -> None:
         if not self._page_alive():
             return
         try:
             self.page.show_dialog(dialog)
-        except RuntimeError:
-            self.is_closing = True
+            self.page.update()
+        except RuntimeError as exc:
+            self.status_text.value = f"Не удалось открыть окно: {exc}"
+            self.status_text.color = ft.Colors.RED_300
+            with contextlib.suppress(RuntimeError):
+                self.page.update()
 
     def _close_dialog(self) -> None:
         if not self._page_alive():
@@ -1167,8 +1196,9 @@ class MailDesktopApp:
         try:
             self.page.pop_dialog()
             self.page.update()
-        except RuntimeError:
-            self.is_closing = True
+        except RuntimeError as exc:
+            if "destroyed session" in str(exc).lower():
+                self.is_closing = True
 
     def _safe_update(self, *controls: ft.Control) -> None:
         if not self._page_alive():
@@ -1179,18 +1209,12 @@ class MailDesktopApp:
                     control.update()
             else:
                 self.page.update()
-        except RuntimeError:
-            self.is_closing = True
+        except RuntimeError as exc:
+            if "destroyed session" in str(exc).lower():
+                self.is_closing = True
 
     def _page_alive(self) -> bool:
-        if self.is_closing:
-            return False
-        try:
-            _ = self.page.session
-        except RuntimeError:
-            self.is_closing = True
-            return False
-        return True
+        return not self.is_closing
 
     def _on_page_closed(self, _: ft.ControlEvent) -> None:
         self.is_closing = True

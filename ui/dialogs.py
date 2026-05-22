@@ -56,7 +56,7 @@ class AccountDialogForm:
             title=ft.Text(title),
             content=ft.Container(
                 width=500,
-                padding=ft.padding.only(top=4),
+                padding=ft.Padding(0, 4, 0, 0),
                 content=ft.Column(
                     controls=[
                         self.email,
@@ -74,7 +74,7 @@ class AccountDialogForm:
                 ft.FilledButton("Сохранить", on_click=on_save),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
-            content_padding=ft.padding.only(left=24, top=12, right=24, bottom=8),
+            content_padding=ft.Padding(24, 12, 24, 8),
         )
 
     def values(self) -> AccountDialogValues:
@@ -107,7 +107,7 @@ class ImportDialogForm:
             title=ft.Text("Импорт аккаунтов из TXT"),
             content=ft.Container(
                 width=520,
-                padding=ft.padding.only(top=4),
+                padding=ft.Padding(0, 4, 0, 0),
                 content=ft.Column(
                     controls=[
                         ft.Text(
@@ -126,7 +126,7 @@ class ImportDialogForm:
                 ft.FilledButton("Выбрать TXT", on_click=on_pick_file),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
-            content_padding=ft.padding.only(left=24, top=12, right=24, bottom=8),
+            content_padding=ft.Padding(24, 12, 24, 8),
         )
 
 
@@ -156,7 +156,7 @@ class ApiSettingsDialogForm:
             title=ft.Text("Настройки API"),
             content=ft.Container(
                 width=520,
-                padding=ft.padding.only(top=4),
+                padding=ft.Padding(0, 4, 0, 0),
                 content=ft.Column(
                     controls=[
                         ft.Text(
@@ -164,6 +164,12 @@ class ApiSettingsDialogForm:
                             color=ft.Colors.WHITE70,
                         ),
                         self.api_key,
+                        ft.Text(
+                            "Следующие две опции применяются только к кнопке \"Обновить всё\": "
+                            "сколько аккаунтов обновлять за одну пачку и сколько ждать между пачками.",
+                            color=ft.Colors.CYAN_100,
+                            size=12,
+                        ),
                         self.batch_size,
                         self.pause_seconds,
                     ],
@@ -176,5 +182,5 @@ class ApiSettingsDialogForm:
                 ft.FilledButton("Сохранить", on_click=on_save),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
-            content_padding=ft.padding.only(left=24, top=12, right=24, bottom=8),
+            content_padding=ft.Padding(24, 12, 24, 8),
         )

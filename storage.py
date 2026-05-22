@@ -54,7 +54,7 @@ class AccountsStorage:
         common_token: str = "",
         name_prefix: str = "Импорт",
     ) -> list[AccountConfig]:
-        content = file_path.read_text(encoding="utf-8").splitlines()
+        content = self._read_accounts_txt(file_path).splitlines()
         accounts: list[AccountConfig] = []
         counter = 1
 
@@ -78,6 +78,15 @@ class AccountsStorage:
                 counter += 1
 
         return accounts
+
+    @staticmethod
+    def _read_accounts_txt(file_path: Path) -> str:
+        for encoding in ("utf-8-sig", "utf-8", "cp1251"):
+            try:
+                return file_path.read_text(encoding=encoding)
+            except UnicodeDecodeError:
+                continue
+        return file_path.read_text(encoding="utf-8", errors="replace")
 
     @staticmethod
     def merge_accounts(

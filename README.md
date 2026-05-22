@@ -47,12 +47,6 @@ python main.py
 dist\NotLettersDesktop
 ```
 
-Setup собирается через NSIS:
-
-```powershell
-makensis NotLettersHUB.nsi
-```
-
 ## Релизные файлы
 
 - `NotLettersHUB_x64_Setup.exe` — установщик для Windows.

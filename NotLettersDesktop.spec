@@ -12,7 +12,7 @@ a = Analysis(
     ["main.py"],
     pathex=[str(project_root)],
     binaries=collect_dynamic_libs("flet_desktop"),
-    datas=[("Logo", "Logo"), *collect_data_files("flet_desktop")],
+    datas=[("Logo", "Logo"), *collect_data_files("flet"), *collect_data_files("flet_desktop")],
     hiddenimports=["flet_desktop"],
     hookspath=[],
     hooksconfig={},

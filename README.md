@@ -51,7 +51,6 @@ dist\NotLettersDesktop
 
 - `NotLettersHUB_x64_Setup.exe` — установщик для Windows.
 - `NotLettersHUB_x64_portable` — portable-версия без установки.
-- `NotLettersHUB_v2.0.0_sources.zip` — исходный код релиза.
 
 ## Лицензия и обратная связь
 
